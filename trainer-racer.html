@@ -1,0 +1,1129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trainer Racer — Web Bluetooth</title>
+  <style>
+    :root { --bg:#0b0f19; --card:#121829; --text:#e8eefc; --muted:#9fb0d9; --accent:#7dd3fc; --line:#1e293b; }
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(1200px 800px at 20% -10%, #11183a 0%, #090d17 60%, #060913 100%);font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;color:var(--text)}
+    header{padding:20px 24px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:center;justify-content:space-between}
+    h1{font-size:20px;margin:0;letter-spacing:0.3px}
+    .btn{appearance:none;border:0;border-radius:14px;padding:12px 16px;background:#1f2a44;color:var(--text);cursor:pointer;font-weight:600}
+    .btn.primary{background:linear-gradient(180deg,#1e90ff,#2563eb)}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    .wrap{display:grid;grid-template-columns:360px 1fr;gap:16px;padding:16px}
+    .card{background:linear-gradient(180deg,#121829,#0e1424);border:1px solid var(--line);border-radius:20px;box-shadow:0 10px 30px rgba(0,0,0,.25);}
+    .card h2{margin:0;padding:16px 16px 8px;font-size:16px;color:var(--muted);font-weight:700}
+    .card .content{padding:12px 16px 16px}
+    .meters{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .meter{background:#0b1020;border:1px solid #182036;border-radius:14px;padding:12px}
+    .label{font-size:12px;color:var(--muted)}
+    .value{font-variant-numeric:tabular-nums;font-weight:800;font-size:28px;margin-top:6px}
+    .sm{font-size:12px;color:#99a7c8}
+    canvas{width:100%;height:520px;display:block;border-bottom-left-radius:20px;border-bottom-right-radius:20px}
+    .log{max-height:180px;overflow:auto;font-family:ui-monospace, SFMono-Regular, Menlo, monospace;font-size:12px;background:#05070d;border:1px solid #0e1424;border-radius:12px;padding:10px}
+    .pill{display:inline-flex;align-items:center;gap:8px;background:#0c142a;border:1px solid #19223a;border-radius:999px;padding:6px 10px;color:var(--muted);}
+    .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+      .dot{display:inline-block;width:8px;height:8px;border-radius:999px;margin-right:8px;background:#ef4444}
+    .dot.ok{background:#22c55e}
+  </style>
+</head>
+<body>
+  <header>
+        <div class="row">
+      <h1>🚴‍♀️ Trainer Racer (Web Bluetooth)</h1>
+      <span id="modePill" class="pill"><span class="dot" id="connDot"></span><span id="connText">Not connected</span></span>
+    </div>
+    <div class="row">
+      <button id="connectBtn" class="btn primary">Connect trainer</button>
+      <button id="pauseBtn" class="btn" disabled>Pause</button>
+      <button id="resetBtn" class="btn" disabled>Reset</button>
+      <button id="resistanceBtn" class="btn" disabled style="display:none">Set Resistance</button>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <section class="card" style="grid-column:1/2">
+      <h2>Live metrics</h2>
+      <div class="content">
+        <div class="meters">
+          <div class="meter">
+            <div class="label">Power</div>
+            <div class="value"><span id="wVal">0</span> <span class="sm">W</span></div>
+          </div>
+          <div class="meter">
+            <div class="label">Speed</div>
+            <div class="value"><span id="spdVal">0.0</span> <span class="sm">km/h</span></div>
+          </div>
+          <div class="meter">
+            <div class="label">Cadence</div>
+            <div class="value"><span id="cadVal">0</span> <span class="sm">rpm</span></div>
+          </div>
+          <div class="meter">
+            <div class="label">Distance</div>
+            <div class="value"><span id="distVal">0.00</span> <span class="sm">km</span></div>
+          </div>
+        </div>
+        <div style="margin-top:12px" class="sm">Tip: If your trainer only supports ANT+, use a bridge (e.g., CABLE, NPE WASP) or a USB ANT+ stick with a native app. This web demo speaks Bluetooth LE (FTMS/Cycling Power).</div>
+      </div>
+    </section>
+
+    <section class="card" style="grid-column:1/2">
+      <h2>Device</h2>
+      <div class="content">
+        <div class="meters" style="grid-template-columns:1fr 1fr">
+          <div class="meter"><div class="label">Device</div><div class="value" style="font-size:16px" id="devName">—</div></div>
+          <div class="meter"><div class="label">Mode</div><div class="value" style="font-size:16px" id="devMode">—</div></div>
+          <div class="meter"><div class="label">Manufacturer</div><div class="value" style="font-size:16px" id="devMfr">—</div></div>
+          <div class="meter"><div class="label">Firmware</div><div class="value" style="font-size:16px" id="devFw">—</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" style="grid-column:2/3;display:grid;grid-template-rows:auto 1fr;">
+      <h2>Race</h2>
+      <canvas id="gameCanvas" width="1200" height="520"></canvas>
+    </section>
+
+    <section class="card" style="grid-column:1/3">
+      <h2>Debug</h2>
+      <div class="content">
+        <div class="row" style="margin-bottom:8px">
+          <span class="pill">Web Bluetooth: <strong id="wbStatus">checking…</strong></span>
+          <span class="pill">Service: <strong id="svcStatus">—</strong></span>
+          <span class="pill">Characteristic: <strong id="charStatus">—</strong></span>
+        </div>
+        <div class="log" id="log"></div>
+      </div>
+    </section>
+  </div>
+
+<script>
+(function(){
+  const log = (m)=>{ const el=document.getElementById('log'); const t=new Date().toLocaleTimeString(); el.textContent = `[${t}] ${m}\n` + el.textContent; }
+  const wb = 'bluetooth' in navigator; document.getElementById('wbStatus').textContent = wb? 'available':'unavailable';
+  if(!wb){ alert('Web Bluetooth not available in this browser. Try Chrome on desktop.'); }
+
+  // --- Game state ---
+  const state = {
+    running:true,
+    watts:0, speedKmh:0, cadence:0,
+    distanceM:0,
+    // Game world
+    trackLenM: 2000, // 2 km course
+    playerPos: 0,  // meters along track
+    playerLane: 0, // -1 = left, 0 = center, 1 = right (for steering)
+    lastTs: performance.now(),
+    // Obstacles and chasers
+    obstacles: [], // {x: meters, lane: -1/0/1, type: 'obstacle'}
+    nextObstacleDistance: 50, // meters until next obstacle spawns
+    nextChaserDistance: 150, // meters until next chaser spawns
+    chasers: [], // {x: meters, lane: -1/0/1, speed: m/s, type: 'animal'}
+    gameOver: false,
+    // Keyboard mode
+    keyboardMode: false,
+    keyboardPower: 0, // watts from keyboard input
+    keyboardCadence: 0, // rpm from keyboard input
+  };
+
+  // Steering state
+  let steeringInput = 0; // -1 = left, 0 = none, 1 = right
+  const STEER_SPEED = 3; // lane change speed (units per second)
+
+  // Simple bot target power pattern
+  function botWatts(t){
+    // undulating 140–240 W
+    return 190 + 50*Math.sin(t/3000) + 30*Math.sin(t/1400);
+  }
+
+  // Physics: power -> speed (very rough arcade mapping)
+  function wattsToSpeedKmh(W){
+    // Not physically accurate — fun scaling with diminishing returns
+    const v = Math.pow(W/20, 0.6); // m/s-ish
+    return Math.max(0, v*3.6);
+  }
+
+  // Spawn obstacles
+  function spawnObstacle(distance) {
+    const lanes = [-1, 0, 1];
+    const randomLane = lanes[Math.floor(Math.random() * lanes.length)];
+    state.obstacles.push({
+      x: distance,
+      lane: randomLane,
+      type: 'obstacle'
+    });
+  }
+
+  // Spawn animal chaser
+  function spawnChaser(distance) {
+    const lanes = [-1, 0, 1];
+    const randomLane = lanes[Math.floor(Math.random() * lanes.length)];
+    state.chasers.push({
+      x: distance,
+      lane: randomLane,
+      speed: 6 + Math.random() * 4, // m/s chase speed
+      type: 'animal'
+    });
+  }
+
+  // Check collisions
+  function checkCollisions() {
+    const playerX = state.playerPos;
+    const playerLane = state.playerLane;
+    
+    // Check obstacle collisions
+    for (let i = state.obstacles.length - 1; i >= 0; i--) {
+      const obs = state.obstacles[i];
+      const distance = Math.abs(obs.x - playerX);
+      if (distance < 8 && obs.lane === playerLane) {
+        state.gameOver = true;
+        state.running = false;
+        log('Game Over: Hit an obstacle!');
+        return true;
+      }
+      if (obs.x < playerX - 10) {
+        state.obstacles.splice(i, 1);
+      }
+    }
+
+    // Check chaser collisions
+    for (let i = state.chasers.length - 1; i >= 0; i--) {
+      const chaser = state.chasers[i];
+      const distance = Math.abs(chaser.x - playerX);
+      if (distance < 8 && chaser.lane === playerLane) {
+        state.gameOver = true;
+        state.running = false;
+        log('Game Over: Caught by an animal!');
+        return true;
+      }
+      if (chaser.x < playerX - 20 || chaser.x > playerX + 100) {
+        state.chasers.splice(i, 1);
+      }
+    }
+    return false;
+  }
+
+  // Keyboard controls for pedaling simulation
+  let keysPressed = {
+    space: false,
+    up: false,
+    left: false,
+    right: false,
+  };
+  let lastKeyPressTime = 0;
+  const KEYBOARD_CADENCE_BASE = 80;
+  const KEYBOARD_POWER_BASE = 150;
+  const KEYBOARD_POWER_MAX = 350;
+  const KEYBOARD_CADENCE_VARIANCE = 10;
+
+  document.addEventListener('keydown', (e) => {
+    if(e.code === 'Space' || e.key === ' '){
+      e.preventDefault();
+      keysPressed.space = true;
+      if(!state.keyboardMode && (!device || !device.gatt || !device.gatt.connected)) {
+        state.keyboardMode = true;
+        log('Keyboard mode activated. Hold SPACE or ↑ to pedal, ← → to steer.');
+        document.getElementById('pauseBtn').disabled = false;
+        document.getElementById('resetBtn').disabled = false;
+      }
+      updateKeyboardPower();
+    }
+    if(e.key === 'ArrowUp'){
+      e.preventDefault();
+      keysPressed.up = true;
+      if(!state.keyboardMode && (!device || !device.gatt || !device.gatt.connected)) {
+        state.keyboardMode = true;
+        log('Keyboard mode activated. Hold SPACE or ↑ to pedal, ← → to steer.');
+        document.getElementById('pauseBtn').disabled = false;
+        document.getElementById('resetBtn').disabled = false;
+      }
+      updateKeyboardPower();
+    }
+    if(e.key === 'ArrowLeft'){
+      e.preventDefault();
+      keysPressed.left = true;
+      steeringInput = -1;
+      if(!device || !device.gatt || !device.gatt.connected) {
+        state.keyboardMode = true;
+        document.getElementById('pauseBtn').disabled = false;
+        document.getElementById('resetBtn').disabled = false;
+      }
+    }
+    if(e.key === 'ArrowRight'){
+      e.preventDefault();
+      keysPressed.right = true;
+      steeringInput = 1;
+      if(!device || !device.gatt || !device.gatt.connected) {
+        state.keyboardMode = true;
+        document.getElementById('pauseBtn').disabled = false;
+        document.getElementById('resetBtn').disabled = false;
+      }
+    }
+  });
+
+  document.addEventListener('keyup', (e) => {
+    if(e.code === 'Space' || e.key === ' '){
+      keysPressed.space = false;
+      updateKeyboardPower();
+    }
+    if(e.key === 'ArrowUp'){
+      keysPressed.up = false;
+      updateKeyboardPower();
+    }
+    if(e.key === 'ArrowLeft'){
+      keysPressed.left = false;
+      if(!keysPressed.right) steeringInput = 0;
+    }
+    if(e.key === 'ArrowRight'){
+      keysPressed.right = false;
+      if(!keysPressed.left) steeringInput = 0;
+    }
+  });
+
+  function updateKeyboardPower(){
+    if(keysPressed.space || keysPressed.up){
+      const holdTime = performance.now() - lastKeyPressTime;
+      const powerBoost = Math.min(KEYBOARD_POWER_MAX - KEYBOARD_POWER_BASE, holdTime / 15);
+      state.keyboardPower = KEYBOARD_POWER_BASE + powerBoost;
+      state.keyboardCadence = KEYBOARD_CADENCE_BASE + (Math.random() - 0.5) * KEYBOARD_CADENCE_VARIANCE;
+      lastKeyPressTime = performance.now();
+    } else {
+      state.keyboardPower = Math.max(0, state.keyboardPower * 0.93);
+      state.keyboardCadence = Math.max(0, state.keyboardCadence * 0.88);
+    }
+  }
+
+  setInterval(updateKeyboardPower, 50);
+
+  // --- Canvas rendering ---
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  function draw(){
+    const w=canvas.width, h=canvas.height;
+    ctx.clearRect(0,0,w,h);
+    
+    // Beautiful sky gradient - morning/evening colors
+    const skyGradient = ctx.createLinearGradient(0,0,0,h*0.6);
+    skyGradient.addColorStop(0,'#87CEEB'); // Sky blue
+    skyGradient.addColorStop(0.3,'#98D8E8'); // Light blue
+    skyGradient.addColorStop(0.6,'#B0E0E6'); // Powder blue
+    ctx.fillStyle = skyGradient;
+    ctx.fillRect(0,0,w,h*0.6);
+    
+    // Draw clouds
+    drawClouds(ctx, w, h*0.6);
+    
+    // Sun
+    ctx.fillStyle = '#FFD700';
+    ctx.beginPath();
+    ctx.arc(w*0.85, h*0.15, 40, 0, Math.PI*2);
+    ctx.fill();
+    // Sun glow
+    const sunGlow = ctx.createRadialGradient(w*0.85, h*0.15, 30, w*0.85, h*0.15, 50);
+    sunGlow.addColorStop(0, 'rgba(255,215,0,0.5)');
+    sunGlow.addColorStop(1, 'rgba(255,215,0,0)');
+    ctx.fillStyle = sunGlow;
+    ctx.fill();
+    
+    // Ground/grass gradient
+    const groundGradient = ctx.createLinearGradient(0,h*0.6,0,h);
+    groundGradient.addColorStop(0,'#90EE90'); // Light green
+    groundGradient.addColorStop(0.3,'#7CB342'); // Medium green
+    groundGradient.addColorStop(1,'#558B2F'); // Dark green
+    ctx.fillStyle = groundGradient;
+    ctx.fillRect(0,h*0.6,w,h*0.4);
+    
+    // Draw distant mountains/hills
+    drawMountains(ctx, w, h*0.6);
+    
+    // Draw trees in background
+    drawBackgroundTrees(ctx, w, h, state.playerPos);
+
+    // Road surface with asphalt texture
+    const margin=60, trackWidth=240;
+    const trackY = h/2 - trackWidth/2;
+    
+    // Road base (asphalt gray)
+    const roadGradient = ctx.createLinearGradient(0,trackY,0,trackY+trackWidth);
+    roadGradient.addColorStop(0,'#2C2C2C');
+    roadGradient.addColorStop(0.5,'#1A1A1A');
+    roadGradient.addColorStop(1,'#2C2C2C');
+    ctx.fillStyle = roadGradient;
+    ctx.fillRect(margin, trackY, w - margin*2, trackWidth);
+    
+    // Road center line (yellow)
+    ctx.strokeStyle = '#FFD700';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([20, 20]);
+    ctx.beginPath();
+    ctx.moveTo(margin, trackY + trackWidth/2);
+    ctx.lineTo(w - margin, trackY + trackWidth/2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    
+    // Road shoulders (dirt/gravel)
+    ctx.fillStyle='#8B7355';
+    ctx.fillRect(margin - 20, trackY, 20, trackWidth);
+    ctx.fillRect(w - margin, trackY, 20, trackWidth);
+
+    // Lane dividers (white dashed lines)
+    ctx.strokeStyle='#FFFFFF';
+    ctx.lineWidth=2;
+    ctx.setLineDash([15, 10]);
+    for(let i=1; i<3; i++){
+      const y = trackY + (trackWidth/3) * i;
+      ctx.beginPath();
+      ctx.moveTo(margin, y);
+      ctx.lineTo(w - margin, y);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // Camera follows player - center view on player position
+    const cameraOffset = Math.max(0, Math.min(state.trackLenM - 100, state.playerPos - 100));
+    const px = (pos)=> {
+      const relativePos = pos - cameraOffset;
+      return margin + (relativePos / 200) * (w - margin*2 - margin);
+    };
+    const py = (lane)=> trackY + trackWidth/2 + (lane * trackWidth/3);
+
+    // finish line (only draw if visible)
+    const finishX = px(state.trackLenM);
+    if(finishX >= margin && finishX <= w - margin){
+      ctx.strokeStyle='#93c5fd'; ctx.setLineDash([6,6]);
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(finishX, trackY); ctx.lineTo(finishX, trackY + trackWidth); ctx.stroke(); ctx.setLineDash([]);
+    }
+    
+    // Road texture/details
+    // Add some road wear marks
+    ctx.fillStyle='rgba(100,100,100,0.3)';
+    for(let i = 0; i < 5; i++){
+      const markX = margin + (w - margin*2) * (i / 5) + (cameraOffset * 0.1) % 50;
+      ctx.fillRect(markX, trackY + trackWidth*0.2, 2, trackWidth*0.6);
+    }
+
+    // Draw obstacles (construction barriers/cones)
+    state.obstacles.forEach(obs => {
+      const x = px(obs.x);
+      const y = py(obs.lane);
+      if(x >= margin - 50 && x <= w - margin + 50){
+        const distance = obs.x - state.playerPos;
+        const isInPlayerLane = obs.lane === state.playerLane;
+        const isClose = distance > 0 && distance < 60;
+        
+        // Pulse effect if obstacle is close and in player's lane
+        if(isClose && isInPlayerLane){
+          const pulse = Math.sin(Date.now()/100) * 5;
+          ctx.shadowColor = '#FF0000';
+          ctx.shadowBlur = 15 + pulse;
+        } else {
+          ctx.shadowBlur = 0;
+        }
+        
+        // Shadow
+        ctx.fillStyle='rgba(0,0,0,0.4)';
+        ctx.beginPath();
+        ctx.ellipse(x, y+18, 25, 10, 0, 0, Math.PI*2);
+        ctx.fill();
+        
+        // Construction barrier (orange/white stripes)
+        // Base
+        ctx.fillStyle='#FF8C00';
+        ctx.fillRect(x - 15, y - 32, 30, 50);
+        
+        // Reflective white stripes
+        ctx.fillStyle='#FFFFFF';
+        ctx.fillRect(x - 12, y - 28, 24, 8);
+        ctx.fillRect(x - 12, y - 16, 24, 8);
+        ctx.fillRect(x - 12, y - 4, 24, 8);
+        ctx.fillRect(x - 12, y + 8, 24, 8);
+        
+        // 3D depth effect
+        ctx.fillStyle='rgba(255,255,255,0.2)';
+        ctx.fillRect(x - 15, y - 32, 8, 50);
+        
+        // Warning sign on top
+        ctx.fillStyle='#DC143C';
+        ctx.beginPath();
+        ctx.moveTo(x, y - 38);
+        ctx.lineTo(x - 10, y - 32);
+        ctx.lineTo(x + 10, y - 32);
+        ctx.fill();
+        ctx.fillStyle='#FFFFFF';
+        ctx.font='bold 12px Arial';
+        ctx.textAlign='center';
+        ctx.fillText('!', x, y - 30);
+        ctx.textAlign='left';
+        
+        // Distance indicator above obstacle
+        if(distance > 0 && distance < 80){
+          ctx.fillStyle = isInPlayerLane ? '#FF0000' : '#FFA500';
+          ctx.font='bold 14px system-ui';
+          ctx.textAlign='center';
+          ctx.fillText(`${Math.round(distance)}m`, x, y - 50);
+          ctx.textAlign='left';
+        }
+        
+        ctx.shadowBlur = 0;
+      }
+    });
+
+    // Draw animal chasers
+    state.chasers.forEach(chaser => {
+      const x = px(chaser.x);
+      const y = py(chaser.lane);
+      if(x >= margin && x <= w - margin){
+        drawAnimal(x, y, chaser.type);
+      }
+    });
+
+    // player position
+    const playerX = px(state.playerPos);
+    const playerY = py(state.playerLane);
+    drawRider(playerX, playerY, '#7dd3fc');
+
+    // HUD
+    ctx.fillStyle='#cdd6f4'; ctx.font='700 18px system-ui';
+    ctx.fillText('You', margin, playerY - 12);
+    
+    // Warning for chasers
+    let hasChaserNearby = false;
+    state.chasers.forEach(chaser => {
+      if(chaser.x > state.playerPos && chaser.x < state.playerPos + 35 && chaser.lane === state.playerLane){
+        hasChaserNearby = true;
+      }
+    });
+    if(hasChaserNearby){
+      ctx.fillStyle='#fbbf24';
+      ctx.font='700 28px system-ui';
+      ctx.fillText('⚠️ ANIMAL CHASING! PEDAL FASTER!', w/2 - 200, 50);
+    }
+    
+    // Warning for obstacles ahead (show if obstacle is in player's lane)
+    let obstacleAhead = null;
+    state.obstacles.forEach(obs => {
+      const distance = obs.x - state.playerPos;
+      if(distance > 0 && distance < 60 && obs.lane === state.playerLane){
+        obstacleAhead = obs;
+      }
+    });
+    if(obstacleAhead){
+      const distance = Math.round(obstacleAhead.x - state.playerPos);
+      ctx.fillStyle='#ef4444';
+      ctx.font='700 24px system-ui';
+      ctx.fillText(`🚧 OBSTACLE AHEAD! ${distance}m - STEER AWAY!`, w/2 - 180, 50);
+    }
+
+    // distance and progress text
+    ctx.font='600 16px system-ui';
+    ctx.fillStyle='#9fb0d9';
+    const toGo = Math.max(0, state.trackLenM - state.playerPos);
+    const progress = ((state.playerPos / state.trackLenM) * 100).toFixed(1);
+    ctx.fillText(`Progress: ${progress}% | Finish in ${(toGo/1000).toFixed(2)} km`, margin, 30);
+    
+    // Speed indicator
+    if(state.speedKmh > 0){
+      ctx.fillStyle='#7dd3fc';
+      ctx.font='700 24px system-ui';
+      ctx.fillText(`${state.speedKmh.toFixed(1)} km/h`, margin, 60);
+    }
+    
+    // Controls hint
+    ctx.fillStyle='#6b7280';
+    ctx.font='500 14px system-ui';
+    if(state.keyboardMode && (!device || !device.gatt || !device.gatt.connected)){
+      ctx.fillText('⌨️ Keyboard Mode: SPACE/↑ = Pedal, ← → = Steer', margin, h - 20);
+    } else if(!device || !device.gatt || !device.gatt.connected){
+      ctx.fillText('Press SPACE/↑ to start keyboard mode, ← → to steer', margin, h - 20);
+    } else {
+      ctx.fillText('← → arrow keys to steer', margin, h - 20);
+    }
+
+    if(state.playerPos >= state.trackLenM){
+      ctx.fillStyle='rgba(0,0,0,.7)'; ctx.fillRect(0,0,w,h);
+      ctx.fillStyle='#e8eefc'; ctx.font='800 44px system-ui';
+      ctx.fillText('🏆 You Win!', w/2-120, h/2);
+      state.running=false;
+      document.getElementById('pauseBtn').textContent='Resume';
+    }
+    
+    if(state.gameOver){
+      ctx.fillStyle='rgba(0,0,0,.7)'; ctx.fillRect(0,0,w,h);
+      ctx.fillStyle='#ef4444'; ctx.font='800 44px system-ui';
+      ctx.fillText('💥 Game Over!', w/2-150, h/2);
+      ctx.fillStyle='#9fb0d9'; ctx.font='600 20px system-ui';
+      ctx.fillText('Press Reset to try again', w/2-120, h/2 + 50);
+    }
+  }
+
+  function drawRider(x, y, color){
+    // Make bicycle more visible and animated
+    const ctx2 = ctx;
+    
+    // Wheels (larger, more visible)
+    ctx2.fillStyle = color;
+    ctx2.strokeStyle = color;
+    ctx2.lineWidth = 4;
+    ctx2.beginPath();
+    ctx2.arc(x, y+30, 18, 0, Math.PI*2);
+    ctx2.stroke();
+    // Wheel spokes
+    ctx2.lineWidth = 2;
+    for(let i=0; i<3; i++){
+      const angle = (Date.now()/20 + i*120) * Math.PI/180;
+      ctx2.beginPath();
+      ctx2.moveTo(x, y+30);
+      ctx2.lineTo(x + Math.cos(angle)*18, y+30 + Math.sin(angle)*18);
+      ctx2.stroke();
+    }
+    
+    ctx2.lineWidth = 4;
+    ctx2.beginPath();
+    ctx2.arc(x+60, y+30, 18, 0, Math.PI*2);
+    ctx2.stroke();
+    // Rear wheel spokes
+    ctx2.lineWidth = 2;
+    for(let i=0; i<3; i++){
+      const angle = (Date.now()/20 + i*120 + 60) * Math.PI/180;
+      ctx2.beginPath();
+      ctx2.moveTo(x+60, y+30);
+      ctx2.lineTo(x+60 + Math.cos(angle)*18, y+30 + Math.sin(angle)*18);
+      ctx2.stroke();
+    }
+    
+    // Bike frame
+    ctx2.lineWidth = 5;
+    ctx2.beginPath();
+    ctx2.moveTo(x, y+30);
+    ctx2.lineTo(x+30, y);
+    ctx2.lineTo(x+60, y+30);
+    ctx2.stroke();
+    
+    // Seat
+    ctx2.fillRect(x+25, y-5, 10, 5);
+    
+    // Handlebars
+    ctx2.beginPath();
+    ctx2.moveTo(x+30, y);
+    ctx2.lineTo(x+30, y-15);
+    ctx2.lineTo(x+20, y-18);
+    ctx2.lineTo(x+40, y-18);
+    ctx2.lineTo(x+30, y-15);
+    ctx2.stroke();
+    
+    // Rider (simplified cyclist)
+    ctx2.fillStyle = '#ffffff';
+    ctx2.beginPath(); // Head
+    ctx2.arc(x+28, y-25, 8, 0, Math.PI*2);
+    ctx2.fill();
+    
+    ctx2.strokeStyle = '#ffffff';
+    ctx2.lineWidth = 3;
+    // Body
+    ctx2.beginPath();
+    ctx2.moveTo(x+28, y-17);
+    ctx2.lineTo(x+28, y-5);
+    ctx2.stroke();
+    // Arms
+    ctx2.beginPath();
+    ctx2.moveTo(x+28, y-12);
+    ctx2.lineTo(x+20, y-15);
+    ctx2.moveTo(x+28, y-12);
+    ctx2.lineTo(x+36, y-15);
+    ctx2.stroke();
+    // Legs
+    const pedalPhase = Math.sin(Date.now()/100) * 0.3;
+    ctx2.beginPath();
+    ctx2.moveTo(x+28, y-5);
+    ctx2.lineTo(x+15, y+20 + pedalPhase*5);
+    ctx2.moveTo(x+28, y-5);
+    ctx2.lineTo(x+41, y+20 - pedalPhase*5);
+    ctx2.stroke();
+  }
+
+  function drawAnimal(x, y, type){
+    // Animated running animal (wolf/dog-like)
+    const runPhase = Math.sin(Date.now()/150) * 0.3;
+    
+    // Shadow
+    ctx.fillStyle='rgba(0,0,0,0.3)';
+    ctx.beginPath();
+    ctx.ellipse(x, y+25, 30, 10, 0, 0, Math.PI*2);
+    ctx.fill();
+    
+    // Body (brown/dark)
+    const bodyGradient = ctx.createLinearGradient(x-25, y-10, x+25, y+15);
+    bodyGradient.addColorStop(0, '#5D4037');
+    bodyGradient.addColorStop(1, '#8D6E63');
+    ctx.fillStyle = bodyGradient;
+    ctx.beginPath();
+    ctx.ellipse(x, y, 28, 20, 0, 0, Math.PI*2);
+    ctx.fill();
+    
+    // Legs (animated running)
+    ctx.fillStyle='#5D4037';
+    // Front legs
+    ctx.fillRect(x-20, y+8 + runPhase*3, 10, 20);
+    ctx.fillRect(x-5, y+10 - runPhase*3, 10, 20);
+    // Back legs
+    ctx.fillRect(x+8, y+8 + runPhase*3, 10, 22);
+    ctx.fillRect(x+18, y+10 - runPhase*3, 10, 22);
+    
+    // Head
+    ctx.fillStyle='#6D4C41';
+    ctx.beginPath();
+    ctx.arc(x+28, y-10, 14, 0, Math.PI*2);
+    ctx.fill();
+    
+    // Snout
+    ctx.beginPath();
+    ctx.arc(x+35, y-8, 6, 0, Math.PI*2);
+    ctx.fill();
+    
+    // Eye (glowing yellow - scary!)
+    ctx.fillStyle='#FFD700';
+    ctx.beginPath();
+    ctx.arc(x+30, y-12, 5, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle='#FF6B00';
+    ctx.beginPath();
+    ctx.arc(x+30, y-12, 3, 0, Math.PI*2);
+    ctx.fill();
+    
+    // Ear
+    ctx.fillStyle='#5D4037';
+    ctx.beginPath();
+    ctx.moveTo(x+35, y-20);
+    ctx.lineTo(x+38, y-25);
+    ctx.lineTo(x+33, y-22);
+    ctx.fill();
+    
+    // Tail (animated)
+    ctx.beginPath();
+    ctx.moveTo(x-25, y);
+    ctx.quadraticCurveTo(x-35, y-5 + runPhase*2, x-30, y-10);
+    ctx.lineWidth = 6;
+    ctx.strokeStyle='#6D4C41';
+    ctx.stroke();
+  }
+
+  // Helper functions for background scenery
+  function drawClouds(ctx, w, skyHeight){
+    ctx.fillStyle='rgba(255,255,255,0.8)';
+    // Cloud 1
+    drawCloud(ctx, w*0.2 + (state.playerPos * 0.01) % w, skyHeight*0.3, 60, 25);
+    // Cloud 2
+    drawCloud(ctx, w*0.6 + (state.playerPos * 0.015) % w, skyHeight*0.4, 50, 20);
+    // Cloud 3
+    drawCloud(ctx, w*0.8 + (state.playerPos * 0.008) % w, skyHeight*0.2, 45, 18);
+  }
+
+  function drawCloud(ctx, x, y, width, height){
+    ctx.beginPath();
+    ctx.arc(x, y, height*0.6, 0, Math.PI*2);
+    ctx.arc(x + width*0.3, y, height*0.8, 0, Math.PI*2);
+    ctx.arc(x + width*0.6, y, height*0.7, 0, Math.PI*2);
+    ctx.arc(x + width*0.4, y - height*0.3, height*0.6, 0, Math.PI*2);
+    ctx.arc(x + width*0.7, y - height*0.2, height*0.5, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  function drawMountains(ctx, w, horizonY){
+    ctx.fillStyle='#795548';
+    // Mountain 1
+    ctx.beginPath();
+    ctx.moveTo(0, horizonY);
+    ctx.lineTo(w*0.3, horizonY - 80);
+    ctx.lineTo(w*0.6, horizonY);
+    ctx.fill();
+    
+    // Mountain 2 (darker, behind)
+    ctx.fillStyle='#6D4C41';
+    ctx.beginPath();
+    ctx.moveTo(w*0.4, horizonY);
+    ctx.lineTo(w*0.7, horizonY - 100);
+    ctx.lineTo(w, horizonY);
+    ctx.fill();
+    
+    // Snow caps
+    ctx.fillStyle='rgba(255,255,255,0.9)';
+    ctx.beginPath();
+    ctx.moveTo(w*0.25, horizonY - 70);
+    ctx.lineTo(w*0.3, horizonY - 80);
+    ctx.lineTo(w*0.35, horizonY - 70);
+    ctx.fill();
+    
+    ctx.beginPath();
+    ctx.moveTo(w*0.65, horizonY - 90);
+    ctx.lineTo(w*0.7, horizonY - 100);
+    ctx.lineTo(w*0.75, horizonY - 90);
+    ctx.fill();
+  }
+
+  function drawBackgroundTrees(ctx, w, h, playerPos){
+    const treeSpacing = 80;
+    const cameraOffset = Math.max(0, Math.min(state.trackLenM - 100, playerPos - 100));
+    const treeStart = Math.floor((cameraOffset - 50) / 5) * 5;
+    
+    for(let i = -5; i < 20; i++){
+      const treePos = treeStart + i * 10;
+      const x = 40 + ((treePos - cameraOffset) / 200) * (w - 80);
+      if(x < -50 || x > w + 50) continue;
+      
+      const treeY = h*0.55;
+      const treeHeight = 60 + (treePos % 30);
+      
+      // Tree trunk
+      ctx.fillStyle='#5D4037';
+      ctx.fillRect(x - 4, treeY, 8, treeHeight*0.3);
+      
+      // Tree foliage (green)
+      ctx.fillStyle='#2E7D32';
+      ctx.beginPath();
+      ctx.arc(x, treeY - treeHeight*0.1, treeHeight*0.4, 0, Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x - treeHeight*0.2, treeY - treeHeight*0.15, treeHeight*0.35, 0, Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x + treeHeight*0.2, treeY - treeHeight*0.15, treeHeight*0.35, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  function loop(ts){
+    const dt = Math.min(0.1, (ts - state.lastTs)/1000); // s
+    state.lastTs = ts;
+    if(state.running && !state.gameOver){
+      // Handle steering input
+      if(steeringInput < 0 && state.playerLane > -1){
+        state.playerLane = Math.max(-1, state.playerLane - STEER_SPEED * dt);
+      } else if(steeringInput > 0 && state.playerLane < 1){
+        state.playerLane = Math.min(1, state.playerLane + STEER_SPEED * dt);
+      }
+      
+      // player physics
+      const vKmh = state.speedKmh || wattsToSpeedKmh(state.watts);
+      const v = vKmh/3.6; // m/s
+      state.playerPos += v * dt;
+      state.distanceM += v * dt;
+
+      // Update chasers - they move toward player
+      state.chasers.forEach(chaser => {
+        if(chaser.x > state.playerPos){
+          chaser.x -= chaser.speed * dt;
+          if(state.speedKmh > 25){
+            chaser.x -= 2 * dt;
+          }
+        } else {
+          chaser.x += chaser.speed * dt;
+        }
+      });
+
+      // Spawn obstacles (more frequent as game progresses)
+      const obstacleSpawnRate = 30 + (state.playerPos / 100);
+      if(state.playerPos >= state.nextObstacleDistance){
+        spawnObstacle(state.nextObstacleDistance + Math.random() * 20);
+        state.nextObstacleDistance += obstacleSpawnRate + Math.random() * 40;
+      }
+
+      // Spawn chasers
+      if(state.playerPos >= state.nextChaserDistance){
+        spawnChaser(state.playerPos + 40 + Math.random() * 30);
+        state.nextChaserDistance += 180 + Math.random() * 120;
+      }
+
+      checkCollisions();
+      draw();
+    } else {
+      draw();
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // UI update
+  function setMetric(id, val){ document.getElementById(id).textContent = val; }
+  function setField(id, val){ const el=document.getElementById(id); if(el) el.textContent = val; }
+  function setConnectedUI(isConnected, text){
+    const dot = document.getElementById('connDot');
+    const pill = document.getElementById('modePill');
+    const ctx = document.getElementById('connText');
+    if(dot){ dot.classList.toggle('ok', !!isConnected); }
+    if(ctx){ ctx.textContent = text; }
+  }
+  function textDec(dv){
+    const dec = new TextDecoder('utf-8');
+    return dec.decode(dv.buffer);
+  }
+  function updateUI(){
+    // Use keyboard input if in keyboard mode and no trainer connected
+    if(state.keyboardMode && (!device || !device.gatt || !device.gatt.connected)){
+      state.watts = state.keyboardPower;
+      state.cadence = state.keyboardCadence;
+      state.speedKmh = wattsToSpeedKmh(state.watts);
+    }
+    
+    setMetric('wVal', Math.round(state.watts));
+    setMetric('spdVal', (state.speedKmh||0).toFixed(1));
+    setMetric('cadVal', Math.round(state.cadence||0));
+    setMetric('distVal', (state.distanceM/1000).toFixed(2));
+    
+    // Update mode indicator
+    const modeText = state.keyboardMode && (!device || !device.gatt || !device.gatt.connected) 
+      ? 'Keyboard Mode' 
+      : device && device.gatt && device.gatt.connected 
+        ? 'Trainer Connected' 
+        : 'Not connected';
+    const isConnected = (state.keyboardMode && (!device || !device.gatt || !device.gatt.connected)) 
+      || (device && device.gatt && device.gatt.connected);
+    setConnectedUI(isConnected, modeText);
+  }
+  setInterval(updateUI, 200);
+
+  // --- Bluetooth logic ---
+  const SVC_CP = 0x1818; // Cycling Power
+  const CHAR_CPM = 0x2A63; // Cycling Power Measurement (notify)
+  const SVC_FTMS = 0x1826; // Fitness Machine Service
+  const CHAR_IBD = 0x2AD2; // Indoor Bike Data (notify)
+  const CHAR_TCP = 0x2AD0; // Fitness Machine Control Point (write)
+  const CHAR_TF = 0x2AD9; // Training Status (read/notify)
+  const SVC_DIS = 0x180A; // Device Information Service
+  const CHAR_FW = 0x2A26; // Firmware Revision String
+  const CHAR_MFR = 0x2A29; // Manufacturer Name
+
+  let device, server, cpmChar, ibdChar, controlPointChar;
+
+  async function connect(){
+    if(!wb) return;
+    try{
+      log('Requesting device…');
+      // Use filters to show only cycling trainers and power meters
+      // Filters use OR logic - device matches if ANY filter matches
+      device = await navigator.bluetooth.requestDevice({
+        filters:[
+          {services:[SVC_CP]},      // Cycling Power Service
+          {services:[SVC_FTMS]},    // Fitness Machine Service
+          {namePrefix: 'KICKR'},    // Wahoo trainers
+          {namePrefix: 'Kickr'},
+          {namePrefix: 'Tacx'},     // Tacx trainers
+          {namePrefix: 'Wahoo'}     // Other Wahoo devices
+        ],
+        optionalServices:[SVC_CP, SVC_FTMS, SVC_DIS]
+      });
+      
+      device.addEventListener('gattserverdisconnected', onDisconnect);
+      log(`Connecting to ${device.name||'device'}…`);
+      server = await device.gatt.connect();
+
+      // Show connected name immediately
+      setConnectedUI(true, `Connected: ${device.name||'Trainer'}`);
+      setField('devName', device.name||'—');
+
+      // Try Cycling Power first
+      let svc, char;
+      try{
+        svc = await server.getPrimaryService(SVC_CP);
+        char = await svc.getCharacteristic(CHAR_CPM);
+        await char.startNotifications();
+        char.addEventListener('characteristicvaluechanged', onCpm);
+        cpmChar = char;
+        setField('devMode','Cycling Power');
+        document.getElementById('svcStatus').textContent = 'Cycling Power (0x1818)';
+        document.getElementById('charStatus').textContent = 'CP Measurement (notify)';
+        document.getElementById('connText').textContent = `Connected: ${device.name||'Trainer'} (CP)`;
+        log('Subscribed to Cycling Power Measurement');
+      }catch(e){
+        log('Cycling Power not found, trying FTMS…');
+        svc = await server.getPrimaryService(SVC_FTMS);
+        char = await svc.getCharacteristic(CHAR_IBD);
+        await char.startNotifications();
+        char.addEventListener('characteristicvaluechanged', onIbd);
+        ibdChar = char;
+        setField('devMode','FTMS');
+        document.getElementById('svcStatus').textContent = 'FTMS (0x1826)';
+        document.getElementById('charStatus').textContent = 'Indoor Bike Data (notify)';
+        document.getElementById('connText').textContent = `Connected: ${device.name||'Trainer'} (FTMS)`;
+        log('Subscribed to Indoor Bike Data');
+      }
+
+      // Try to get control point for trainer resistance control (FTMS)
+      try{
+        const ftmsSvc = await server.getPrimaryService(SVC_FTMS);
+        try{
+          controlPointChar = await ftmsSvc.getCharacteristic(CHAR_TCP);
+          log('Trainer control available - can adjust resistance');
+        }catch(e){
+          log('Trainer control not available: ' + e.message);
+        }
+      }catch(e){
+        // FTMS not available or no control point
+      }
+
+      // Try to read device info
+      try{
+        const dis = await server.getPrimaryService(SVC_DIS);
+        try{
+          const mfrChar = await dis.getCharacteristic(CHAR_MFR);
+          const mfr = await mfrChar.readValue();
+          setField('devMfr', textDec(mfr));
+        }catch{}
+        try{
+          const fwChar = await dis.getCharacteristic(CHAR_FW);
+          const fw = await fwChar.readValue();
+          setField('devFw', textDec(fw));
+        }catch{}
+      }catch{}
+
+      document.getElementById('connectBtn').disabled=true;
+      document.getElementById('pauseBtn').disabled=false;
+      document.getElementById('resetBtn').disabled=false;
+      
+      // Show resistance button if control is available
+      if(controlPointChar){
+        const resBtn = document.getElementById('resistanceBtn');
+        resBtn.style.display = 'inline-block';
+        resBtn.disabled = false;
+      }
+      
+      // Disable keyboard mode when trainer connects
+      state.keyboardMode = false;
+      
+      // Auto-start game when trainer connects
+      state.running = true;
+      log('Game started! Pedal to move forward.');
+
+    }catch(err){
+      log('Connect error: '+err);
+      log('Error details: ' + JSON.stringify({
+        name: err.name,
+        message: err.message,
+        code: err.code
+      }));
+      if(err.name === 'NotFoundError'){
+        alert('No device selected or device not found. Make sure your trainer is powered on and in pairing mode.');
+      } else if(err.name === 'SecurityError'){
+        alert('Security error: Make sure you\'re using HTTPS or localhost, and grant Bluetooth permissions.');
+      } else {
+        alert('Failed to connect: '+err.message);
+      }
+      setConnectedUI(false, 'Not connected');
+      document.getElementById('connectBtn').disabled = false;
+    }
+  }
+
+  function onDisconnect(){
+    log('Disconnected');
+    setConnectedUI(false, 'Not connected');
+    document.getElementById('connectBtn').disabled=false;
+    setField('devMode','—');
+    document.getElementById('pauseBtn').disabled=true;
+    document.getElementById('resetBtn').disabled=true;
+  }
+
+  function onCpm(event){
+    const dv = event.target.value; // DataView
+    // Flags (uint16), then instantaneous power (sint16)
+    // Spec: https://www.bluetooth.com/specifications/specs/cycling-power-service-1-1/
+    const flags = dv.getUint16(0, true);
+    const power = dv.getInt16(2, true); // watts
+    state.watts = Math.max(0, power);
+    // cadence optionally present at various offsets based on flags; skip for simplicity
+  }
+
+  function onIbd(event){
+    const dv = event.target.value;
+    const flags = dv.getUint16(0,true);
+    let idx = 2;
+    // Indoor Bike Data flags bit meaning is complex; we parse common fields if present
+    // Instantaneous speed present? Bit 0
+    if(flags & 0x0001){
+      const spd = dv.getUint16(idx,true); idx+=2; // 0.01 m/s
+      state.speedKmh = (spd/100)*3.6;
+    }
+    // Average speed (skip) bit1
+    if(flags & 0x0002){ idx+=2; }
+    // Instantaneous cadence present? Bit2 (0.5 rpm)
+    if(flags & 0x0004){ const cad = dv.getUint16(idx,true); idx+=2; state.cadence = cad/2; }
+    // Average cadence (skip) bit3
+    if(flags & 0x0008){ idx+=2; }
+    // Total distance present? Bit 4 (meter)
+    if(flags & 0x0010){ const dist = dv.getUint24? dv.getUint24(idx,true) : (dv.getUint16(idx,true) + (dv.getUint8(idx+2)<<16)); idx+=3; state.distanceM = dist; }
+    // Resistance level (skip) bit5
+    if(flags & 0x0020){ idx+=2; }
+    // Instantaneous power present? Bit 6 (watt)
+    if(flags & 0x0040){ const pwr = dv.getInt16(idx,true); idx+=2; state.watts = Math.max(0,pwr); }
+  }
+
+  // Set trainer resistance (FTMS only)
+  async function setTrainerResistance(percent){
+    if(!controlPointChar) {
+      log('Control point not available');
+      return;
+    }
+    try{
+      // FTMS Control Point command: Set Target Resistance Level (0x04)
+      // percent: 0-100 (0% to 100% of maximum resistance)
+      const percentValue = Math.max(0, Math.min(100, Math.round(percent * 10))); // 0.1% units
+      const buffer = new ArrayBuffer(3);
+      const view = new DataView(buffer);
+      view.setUint8(0, 0x04); // Op code: Set Target Resistance Level
+      view.setUint16(1, percentValue, true); // Little endian
+      
+      await controlPointChar.writeValue(buffer);
+      log(`Resistance set to ${percent}%`);
+    }catch(err){
+      log('Failed to set resistance: ' + err.message);
+    }
+  }
+
+  // UI handlers
+  document.getElementById('connectBtn').addEventListener('click', connect);
+  document.getElementById('pauseBtn').addEventListener('click', ()=>{
+    state.running = !state.running;
+    document.getElementById('pauseBtn').textContent = state.running? 'Pause':'Resume';
+  });
+  document.getElementById('resistanceBtn').addEventListener('click', async ()=>{
+    const resistance = prompt('Enter resistance (0-100%):', '25');
+    if(resistance !== null){
+      const val = parseFloat(resistance);
+      if(!isNaN(val)){
+        await setTrainerResistance(val);
+      }
+    }
+  });
+  document.getElementById('resetBtn').addEventListener('click', ()=>{
+    state.playerPos=0; 
+    state.playerLane=0;
+    state.distanceM=0; 
+    state.lastTs=performance.now(); 
+    state.running=true;
+    state.gameOver=false;
+    state.obstacles=[];
+    state.chasers=[];
+    state.nextObstacleDistance=50;
+    state.nextChaserDistance=150;
+    state.keyboardPower = 0;
+    state.keyboardCadence = 0;
+    steeringInput = 0;
+    document.getElementById('pauseBtn').textContent='Pause';
+  });
+
+  // Polyfill for DataView.getUint24 (not standard). Helper above used when present.
+  if(!DataView.prototype.getUint24){
+    DataView.prototype.getUint24 = function(byteOffset, littleEndian){
+      if(littleEndian){
+        return this.getUint8(byteOffset) | (this.getUint8(byteOffset+1)<<8) | (this.getUint8(byteOffset+2)<<16);
+      } else {
+        return (this.getUint8(byteOffset)<<16) | (this.getUint8(byteOffset+1)<<8) | this.getUint8(byteOffset+2);
+      }
+    }
+  }
+})();
+</script>
+</body>
+</html>
