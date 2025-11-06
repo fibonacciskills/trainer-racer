@@ -41,6 +41,7 @@
       <button id="pauseBtn" class="btn" disabled>Pause</button>
       <button id="resetBtn" class="btn" disabled>Reset</button>
       <button id="resistanceBtn" class="btn" disabled style="display:none">Set Resistance</button>
+      <span id="gamepadStatus" class="pill" style="display:none"><span class="dot" id="gamepadDot"></span><span id="gamepadText">No controller</span></span>
     </div>
   </header>
 
@@ -63,7 +64,7 @@
           </div>
           <div class="meter">
             <div class="label">Distance</div>
-            <div class="value"><span id="distVal">0.00</span> <span class="sm">km</span></div>
+            <div class="value"><span id="distVal">0.00</span> <span class="sm">mi</span></div>
           </div>
         </div>
         <div style="margin-top:12px" class="sm">Tip: If your trainer only supports ANT+, use a bridge (e.g., CABLE, NPE WASP) or a USB ANT+ stick with a native app. This web demo speaks Bluetooth LE (FTMS/Cycling Power).</div>
@@ -112,7 +113,7 @@
     watts:0, speedKmh:0, cadence:0,
     distanceM:0,
     // Game world
-    trackLenM: 2000, // 2 km course
+    trackLenM: 8046.7, // 5 miles (5 * 1609.34 meters)
     playerPos: 0,  // meters along track
     playerLane: 0, // -1 = left, 0 = center, 1 = right (for steering)
     lastTs: performance.now(),
@@ -131,6 +132,10 @@
   // Steering state
   let steeringInput = 0; // -1 = left, 0 = none, 1 = right
   const STEER_SPEED = 3; // lane change speed (units per second)
+  
+  // Gamepad/Controller state
+  let gamepadConnected = false;
+  let gamepadIndex = null;
 
   // Simple bot target power pattern
   function botWatts(t){
@@ -296,6 +301,139 @@
   }
 
   setInterval(updateKeyboardPower, 50);
+
+  // --- Gamepad/Controller support for Zwift controllers ---
+  function pollGamepad() {
+    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+    
+    // Find first connected gamepad
+    let activeGamepad = null;
+    for(let i = 0; i < gamepads.length; i++) {
+      if(gamepads[i] && gamepads[i].connected) {
+        activeGamepad = gamepads[i];
+        if(!gamepadConnected) {
+          gamepadConnected = true;
+          gamepadIndex = i;
+          log(`Gamepad connected: ${activeGamepad.id}`);
+        }
+        break;
+      }
+    }
+    
+    if(!activeGamepad && gamepadConnected) {
+      gamepadConnected = false;
+      gamepadIndex = null;
+      log('Gamepad disconnected');
+      return;
+    }
+    
+    if(!activeGamepad) return;
+    
+    // Map gamepad buttons/axes to steering
+    // Standard gamepad: D-pad left/right (buttons 14/15) or left stick X axis (axes[0])
+    // Zwift controllers typically use buttons or D-pad
+    
+    // Check D-pad buttons (standard gamepad mapping)
+    // Button 14 = D-pad left, Button 15 = D-pad right
+    const dpadLeft = activeGamepad.buttons[14]?.pressed || false;
+    const dpadRight = activeGamepad.buttons[15]?.pressed || false;
+    
+    // Check left stick X axis (for analog sticks)
+    const leftStickX = activeGamepad.axes[0] || 0;
+    const stickLeft = leftStickX < -0.5;
+    const stickRight = leftStickX > 0.5;
+    
+    // Check alternative button mappings (some controllers use different buttons)
+    // Try common button combinations
+    const buttonLeft = activeGamepad.buttons[0]?.pressed || activeGamepad.buttons[4]?.pressed || false;
+    const buttonRight = activeGamepad.buttons[1]?.pressed || activeGamepad.buttons[5]?.pressed || false;
+    
+    // Update steering based on gamepad input
+    if(dpadLeft || stickLeft || buttonLeft) {
+      steeringInput = -1;
+    } else if(dpadRight || stickRight || buttonRight) {
+      steeringInput = 1;
+    } else if(steeringInput !== 0 && !keysPressed.left && !keysPressed.right) {
+      // Only reset if keyboard isn't also steering
+      steeringInput = 0;
+    }
+    
+    // Enable pause/reset buttons if gamepad is connected
+    if(gamepadConnected && (!device || !device.gatt || !device.gatt.connected)) {
+      document.getElementById('pauseBtn').disabled = false;
+      document.getElementById('resetBtn').disabled = false;
+    }
+  }
+  
+  // Poll gamepad input every frame
+  setInterval(pollGamepad, 50);
+  
+  // Update gamepad status UI
+  function updateGamepadUI() {
+    const statusEl = document.getElementById('gamepadStatus');
+    const dotEl = document.getElementById('gamepadDot');
+    const textEl = document.getElementById('gamepadText');
+    
+    if(gamepadConnected) {
+      statusEl.style.display = 'inline-flex';
+      if(dotEl) dotEl.classList.add('ok');
+      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+      const gp = gamepads[gamepadIndex];
+      if(textEl && gp) textEl.textContent = `Controller: ${gp.id}`;
+    } else {
+      statusEl.style.display = 'none';
+      if(dotEl) dotEl.classList.remove('ok');
+    }
+  }
+  setInterval(updateGamepadUI, 500);
+  
+  // Listen for gamepad connection events
+  window.addEventListener('gamepadconnected', (e) => {
+    const gp = e.gamepad;
+    log(`Gamepad connected: ${gp.id} (${gp.buttons.length} buttons, ${gp.axes.length} axes)`);
+    log('Press buttons to test - check debug log for button mappings');
+    gamepadConnected = true;
+    gamepadIndex = gp.index;
+    updateGamepadUI();
+    
+    // Debug: Log button presses for first 5 seconds
+    let debugTimeout = setTimeout(() => {
+      log('Gamepad debug mode disabled. If buttons don\'t work, check browser console.');
+    }, 5000);
+    
+    // Add debug logging for button presses
+    const debugInterval = setInterval(() => {
+      if(!gamepadConnected) {
+        clearInterval(debugInterval);
+        clearTimeout(debugTimeout);
+        return;
+      }
+      const gamepads = navigator.getGamepads();
+      if(gamepads[gp.index]) {
+        const buttons = gamepads[gp.index].buttons;
+        for(let i = 0; i < buttons.length; i++) {
+          if(buttons[i].pressed) {
+            log(`Button ${i} pressed (value: ${buttons[i].value})`);
+          }
+        }
+        const axes = gamepads[gp.index].axes;
+        for(let i = 0; i < axes.length; i++) {
+          if(Math.abs(axes[i]) > 0.1) {
+            log(`Axis ${i}: ${axes[i].toFixed(2)}`);
+          }
+        }
+      }
+    }, 200);
+  });
+  
+  window.addEventListener('gamepaddisconnected', (e) => {
+    log(`Gamepad disconnected: ${e.gamepad.id}`);
+    if(gamepadIndex === e.gamepad.index) {
+      gamepadConnected = false;
+      gamepadIndex = null;
+      updateGamepadUI();
+    }
+  });
 
   // --- Canvas rendering ---
   const canvas = document.getElementById('gameCanvas');
@@ -486,11 +624,44 @@
     const playerY = py(state.playerLane);
     drawRider(playerX, playerY, '#7dd3fc');
 
+    // Progress bar (draw first so it's behind warnings)
+    const progressBarWidth = w - margin * 2;
+    const progressBarHeight = 8;
+    const progressBarY = 25;
+    const progressPercent = Math.min(100, (state.playerPos / state.trackLenM) * 100);
+    
+    // Progress bar background
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    ctx.fillRect(margin, progressBarY, progressBarWidth, progressBarHeight);
+    
+    // Progress bar fill
+    const progressGradient = ctx.createLinearGradient(margin, progressBarY, margin + progressBarWidth, progressBarY);
+    progressGradient.addColorStop(0, '#7dd3fc');
+    progressGradient.addColorStop(1, '#2563eb');
+    ctx.fillStyle = progressGradient;
+    ctx.fillRect(margin, progressBarY, (progressBarWidth * progressPercent) / 100, progressBarHeight);
+    
+    // Progress bar border
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(margin, progressBarY, progressBarWidth, progressBarHeight);
+    
+    // Progress text (above progress bar)
+    ctx.font='600 14px system-ui';
+    ctx.fillStyle='#9fb0d9';
+    const distanceMiles = state.playerPos / 1609.34;
+    const totalMiles = state.trackLenM / 1609.34;
+    const toGoMiles = Math.max(0, (state.trackLenM - state.playerPos) / 1609.34);
+    ctx.fillText(`${distanceMiles.toFixed(2)} / ${totalMiles.toFixed(2)} mi (${progressPercent.toFixed(1)}%)`, margin, progressBarY - 5);
+    
+    // Distance remaining (right side)
+    ctx.fillText(`Remaining: ${toGoMiles.toFixed(2)} mi`, margin + progressBarWidth - 150, progressBarY - 5);
+    
     // HUD
     ctx.fillStyle='#cdd6f4'; ctx.font='700 18px system-ui';
     ctx.fillText('You', margin, playerY - 12);
     
-    // Warning for chasers
+    // Warning for chasers (drawn after progress bar so it's visible)
     let hasChaserNearby = false;
     state.chasers.forEach(chaser => {
       if(chaser.x > state.playerPos && chaser.x < state.playerPos + 35 && chaser.lane === state.playerLane){
@@ -500,7 +671,7 @@
     if(hasChaserNearby){
       ctx.fillStyle='#fbbf24';
       ctx.font='700 28px system-ui';
-      ctx.fillText('⚠️ ANIMAL CHASING! PEDAL FASTER!', w/2 - 200, 50);
+      ctx.fillText('⚠️ ANIMAL CHASING! PEDAL FASTER!', w/2 - 200, progressBarY + 50);
     }
     
     // Warning for obstacles ahead (show if obstacle is in player's lane)
@@ -515,32 +686,34 @@
       const distance = Math.round(obstacleAhead.x - state.playerPos);
       ctx.fillStyle='#ef4444';
       ctx.font='700 24px system-ui';
-      ctx.fillText(`🚧 OBSTACLE AHEAD! ${distance}m - STEER AWAY!`, w/2 - 180, 50);
+      ctx.fillText(`🚧 OBSTACLE AHEAD! ${distance}m - STEER AWAY!`, w/2 - 180, progressBarY + 50);
     }
-
-    // distance and progress text
-    ctx.font='600 16px system-ui';
-    ctx.fillStyle='#9fb0d9';
-    const toGo = Math.max(0, state.trackLenM - state.playerPos);
-    const progress = ((state.playerPos / state.trackLenM) * 100).toFixed(1);
-    ctx.fillText(`Progress: ${progress}% | Finish in ${(toGo/1000).toFixed(2)} km`, margin, 30);
     
-    // Speed indicator
+    // Speed indicator (below progress bar)
     if(state.speedKmh > 0){
       ctx.fillStyle='#7dd3fc';
       ctx.font='700 24px system-ui';
-      ctx.fillText(`${state.speedKmh.toFixed(1)} km/h`, margin, 60);
+      ctx.fillText(`${state.speedKmh.toFixed(1)} km/h`, margin, progressBarY + 35);
+      
+      // Also show in mph
+      const speedMph = state.speedKmh * 0.621371;
+      ctx.font='600 18px system-ui';
+      ctx.fillText(`${speedMph.toFixed(1)} mph`, margin, progressBarY + 60);
     }
     
     // Controls hint
     ctx.fillStyle='#6b7280';
     ctx.font='500 14px system-ui';
-    if(state.keyboardMode && (!device || !device.gatt || !device.gatt.connected)){
+    if(gamepadConnected){
+      ctx.fillStyle='#7dd3fc';
+      ctx.fillText('🎮 Controller Connected - Use D-pad/buttons to steer', margin, h - 20);
+    } else if(state.keyboardMode && (!device || !device.gatt || !device.gatt.connected)){
+      ctx.fillStyle='#6b7280';
       ctx.fillText('⌨️ Keyboard Mode: SPACE/↑ = Pedal, ← → = Steer', margin, h - 20);
     } else if(!device || !device.gatt || !device.gatt.connected){
       ctx.fillText('Press SPACE/↑ to start keyboard mode, ← → to steer', margin, h - 20);
     } else {
-      ctx.fillText('← → arrow keys to steer', margin, h - 20);
+      ctx.fillText('← → arrow keys or gamepad D-pad to steer', margin, h - 20);
     }
 
     if(state.playerPos >= state.trackLenM){
@@ -806,11 +979,14 @@
         state.playerLane = Math.min(1, state.playerLane + STEER_SPEED * dt);
       }
       
-      // player physics
+      // player physics - progress based on speed from wattage
       const vKmh = state.speedKmh || wattsToSpeedKmh(state.watts);
       const v = vKmh/3.6; // m/s
       state.playerPos += v * dt;
       state.distanceM += v * dt;
+      
+      // Ensure player position doesn't exceed track length
+      state.playerPos = Math.min(state.playerPos, state.trackLenM);
 
       // Update chasers - they move toward player
       state.chasers.forEach(chaser => {
@@ -871,7 +1047,8 @@
     setMetric('wVal', Math.round(state.watts));
     setMetric('spdVal', (state.speedKmh||0).toFixed(1));
     setMetric('cadVal', Math.round(state.cadence||0));
-    setMetric('distVal', (state.distanceM/1000).toFixed(2));
+    // Distance in miles (distanceM is in meters)
+    setMetric('distVal', (state.distanceM / 1609.34).toFixed(2));
     
     // Update mode indicator
     const modeText = state.keyboardMode && (!device || !device.gatt || !device.gatt.connected) 
@@ -1107,6 +1284,8 @@
     state.chasers=[];
     state.nextObstacleDistance=50;
     state.nextChaserDistance=150;
+    // Reset to 5 mile course
+    state.trackLenM = 8046.7;
     state.keyboardPower = 0;
     state.keyboardCadence = 0;
     steeringInput = 0;
